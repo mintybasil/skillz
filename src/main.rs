@@ -1,4 +1,8 @@
-use anyhow::Result;
+mod manifest;
+
+use std::path::PathBuf;
+
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
 /// Manage agent skills across deployments.
@@ -6,7 +10,7 @@ use clap::{Parser, Subcommand};
 /// Syncs skills from external git submodule sources into a bundle directory,
 /// with 3-way merge support for locally-modified skills.
 #[derive(Parser)]
-#[command(name = "skills-managed", version, about)]
+#[command(name = "skillz", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -25,7 +29,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Sync => {
-            println!("sync: not yet implemented");
+            let repo_root = find_repo_root()?;
+            let _manifest = manifest::Manifest::load(&repo_root)?;
+            println!("sync: manifest loaded, bundle sync not yet implemented");
         }
         Commands::Init => {
             println!("init: not yet implemented");
@@ -33,4 +39,19 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Find the repository root by searching for a `.git` directory or file.
+fn find_repo_root() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let mut current = cwd.as_path();
+    loop {
+        if current.join(".git").exists() {
+            return Ok(current.to_path_buf());
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => bail!("not inside a git repository — could not find .git directory"),
+        }
+    }
 }
