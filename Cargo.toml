@@ -1,5 +1,5 @@
 [package]
-name = "skills-managed"
+name = "skillz"
 version = "0.1.0"
 edition = "2021"
 description = "Manage agent skills across deployments — sync from external sources via git submodules"
