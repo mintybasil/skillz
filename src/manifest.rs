@@ -3,6 +3,18 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Known modification tags describing the nature of local modifications to a skill.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ModTag {
+    /// Modifications for Hermes agent harness compatibility (stripping incompatible
+    /// tool calls, plugins, filenames, etc.).
+    #[serde(rename = "hermes-compat")]
+    HermesCompat,
+    /// Modifications for the operator's own preferences or customizations.
+    #[serde(rename = "personalization")]
+    Personalization,
+}
+
 /// Top-level manifest structure, loaded from `skills-manifest.yaml`.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
@@ -29,7 +41,7 @@ pub struct SkillEntry {
     pub base_ref: Option<String>,
     /// Tags describing the nature of modifications.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mod_tags: Option<Vec<String>>,
+    pub mod_tags: Option<Vec<ModTag>>,
 }
 
 impl Manifest {
@@ -48,8 +60,8 @@ impl Manifest {
 
     /// Parse and validate a manifest from a YAML string.
     pub fn from_str(content: &str) -> Result<Self> {
-        let manifest: Manifest =
-            serde_yaml::from_str(content).with_context(|| "failed to parse manifest YAML")?;
+        let manifest: Manifest = serde_yaml::from_str(content)
+            .with_context(|| "failed to parse manifest YAML — check for typos in field names, invalid YAML syntax, or unknown mod_tag values (valid tags: hermes-compat, personalization)")?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -152,7 +164,7 @@ sources:
         assert_eq!(skill.base_ref.as_deref(), Some("v1.2.3"));
         assert_eq!(
             skill.mod_tags.as_ref().unwrap(),
-            &vec!["hermes-compat".to_string()]
+            &vec![ModTag::HermesCompat]
         );
     }
 
@@ -295,5 +307,43 @@ sources:
         // Should succeed (warn, not error)
         let manifest = Manifest::from_str(yaml).unwrap();
         assert!(!manifest.sources[0].skills[0].modified);
+    }
+
+    #[test]
+    fn test_invalid_mod_tag_errors() {
+        let yaml = r#"
+sources:
+  - name: hermes-skills
+    skills:
+      - path: some-skill
+        modified: true
+        base_ref: v1.0.0
+        mod_tags: [unknown-tag]
+"#;
+        let err = Manifest::from_str(yaml).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("unknown mod_tag values"),
+            "error should mention unknown mod_tag: got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_both_mod_tags_valid() {
+        let yaml = r#"
+sources:
+  - name: hermes-skills
+    skills:
+      - path: some-skill
+        modified: true
+        base_ref: v1.0.0
+        mod_tags: [hermes-compat, personalization]
+"#;
+        let manifest = Manifest::from_str(yaml).unwrap();
+        let tags = manifest.sources[0].skills[0].mod_tags.as_ref().unwrap();
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0], ModTag::HermesCompat);
+        assert_eq!(tags[1], ModTag::Personalization);
     }
 }
