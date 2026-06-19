@@ -1,4 +1,4 @@
-# skills-managed
+# skillz
 
 A tool for managing agent skills across multiple deployments. Syncs skills from external git submodule sources into a bundle directory, with 3-way merge support for locally-modified skills.
 
@@ -12,8 +12,8 @@ For skills that have been locally modified (e.g., for Hermes harness compatibili
 
 ```bash
 # Clone the repo with submodules
-git clone --recurse-submodules https://github.com/mintybasil/skills-managed.git
-cd skills-managed
+git clone --recurse-submodules https://github.com/mintybasil/skillz.git
+cd skillz
 
 # Add an external skill source as a submodule
 git submodule add https://github.com/some-org/skills-repo sources/my-source
