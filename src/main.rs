@@ -1,5 +1,6 @@
 mod git;
 mod manifest;
+mod report;
 mod sync;
 
 use std::path::PathBuf;
@@ -54,32 +55,18 @@ fn main() -> Result<()> {
                     result.merged = modified_result.merged;
                     result.up_to_date = modified_result.up_to_date;
                     result.conflicted = modified_result.conflicted;
+                    result.drift_warnings = modified_result.drift_warnings;
 
                     // Save manifest if any base_refs were updated
                     if need_save {
                         manifest.save(&repo_root)?;
                     }
 
-                    println!(
-                        "synced {} skills, {} unchanged, {} merged, {} up to date, {} conflicted",
-                        result.synced.len(),
-                        result.unchanged.len(),
-                        result.merged.len(),
-                        result.up_to_date.len(),
-                        result.conflicted.len()
-                    );
+                    // Print structured sync report
+                    report::print_sync_report(&result, &repo_root)?;
 
                     // Exit with non-zero code if any conflicts occurred
                     if !result.conflicted.is_empty() {
-                        for c in &result.conflicted {
-                            eprintln!(
-                                "CONFLICT: skill '{}' in source '{}' has {} conflicting file(s): {}",
-                                c.skill_path,
-                                c.source_name,
-                                c.files_conflicted.len(),
-                                c.files_conflicted.join(", ")
-                            );
-                        }
                         std::process::exit(1);
                     }
                 }

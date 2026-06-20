@@ -32,6 +32,9 @@ pub struct SyncResult {
     pub up_to_date: Vec<(String, String)>,
     /// Modified skills that had conflicts during merge.
     pub conflicted: Vec<MergeResult>,
+    /// Drift warnings for skills whose base_ref could not be resolved.
+    /// Each tuple is (source_name, skill_path, base_ref).
+    pub drift_warnings: Vec<(String, String, String)>,
 }
 
 impl SyncResult {
@@ -137,13 +140,20 @@ pub fn sync_modified(repo_root: &Path, manifest: &mut Manifest) -> Result<SyncRe
             // Get current submodule HEAD SHA
             let current_sha = git::get_submodule_head_sha(repo_root, &source.name)?;
 
-            // Resolve base_ref to SHA
-            let base_sha = git::resolve_ref(&submodule_path, base_ref).with_context(|| {
-                format!(
-                    "failed to resolve base_ref '{}' for skill '{}' in source '{}'",
-                    base_ref, skill_path, source.name
-                )
-            })?;
+            // Resolve base_ref to SHA.
+            // If the ref can't be resolved (tag deleted, branch removed), record
+            // a drift warning and skip this skill — don't bail the whole sync.
+            let base_sha = match git::resolve_ref(&submodule_path, base_ref) {
+                Ok(sha) => sha,
+                Err(_) => {
+                    result.drift_warnings.push((
+                        source.name.clone(),
+                        skill_path.clone(),
+                        base_ref.clone(),
+                    ));
+                    continue;
+                }
+            };
 
             let merge_result = if current_sha == base_sha {
                 // Up to date — no changes upstream
