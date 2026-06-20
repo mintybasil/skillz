@@ -1,3 +1,4 @@
+mod git;
 mod manifest;
 
 use std::path::PathBuf;
@@ -19,7 +20,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Build or rebuild the skill bundle from submodules + manifest
-    Sync,
+    Sync {
+        /// Optional source name to query the current submodule HEAD SHA.
+        /// When provided, prints the current ref for that source instead of syncing.
+        #[arg(long)]
+        source: Option<String>,
+    },
     /// Create a minimal manifest and directory structure
     Init,
 }
@@ -28,10 +34,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Sync => {
+        Commands::Sync { source } => {
             let repo_root = find_repo_root()?;
             let _manifest = manifest::Manifest::load(&repo_root)?;
-            println!("sync: manifest loaded, bundle sync not yet implemented");
+            match source {
+                Some(name) => {
+                    let sha = git::get_submodule_head_sha(&repo_root, &name)?;
+                    println!("{name}: {sha}");
+                }
+                None => {
+                    println!("sync: manifest loaded, bundle sync not yet implemented");
+                }
+            }
         }
         Commands::Init => {
             println!("init: not yet implemented");
