@@ -37,19 +37,51 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Sync { source } => {
             let repo_root = find_repo_root()?;
-            let manifest = manifest::Manifest::load(&repo_root)?;
             match source {
                 Some(name) => {
                     let sha = git::get_submodule_head_sha(&repo_root, &name)?;
                     println!("{name}: {sha}");
                 }
                 None => {
-                    let result = sync::sync_unmodified(&repo_root, &manifest)?;
+                    let mut manifest = manifest::Manifest::load(&repo_root)?;
+                    let mut result = sync::sync_unmodified(&repo_root, &manifest)?;
+                    let modified_result = sync::sync_modified(&repo_root, &mut manifest)?;
+
+                    // Check if any base_refs were updated before moving fields
+                    let need_save = modified_result.any_base_ref_updated();
+
+                    // Merge modified results into the main result
+                    result.merged = modified_result.merged;
+                    result.up_to_date = modified_result.up_to_date;
+                    result.conflicted = modified_result.conflicted;
+
+                    // Save manifest if any base_refs were updated
+                    if need_save {
+                        manifest.save(&repo_root)?;
+                    }
+
                     println!(
-                        "synced {} skills, {} unchanged",
+                        "synced {} skills, {} unchanged, {} merged, {} up to date, {} conflicted",
                         result.synced.len(),
-                        result.unchanged.len()
+                        result.unchanged.len(),
+                        result.merged.len(),
+                        result.up_to_date.len(),
+                        result.conflicted.len()
                     );
+
+                    // Exit with non-zero code if any conflicts occurred
+                    if !result.conflicted.is_empty() {
+                        for c in &result.conflicted {
+                            eprintln!(
+                                "CONFLICT: skill '{}' in source '{}' has {} conflicting file(s): {}",
+                                c.skill_path,
+                                c.source_name,
+                                c.files_conflicted.len(),
+                                c.files_conflicted.join(", ")
+                            );
+                        }
+                        std::process::exit(1);
+                    }
                 }
             }
         }

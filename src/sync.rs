@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
+use crate::git;
 use crate::manifest::{Manifest, SkillEntry, Source};
 
 /// Result of syncing unmodified skills.
@@ -25,6 +26,33 @@ pub struct SyncResult {
     pub synced: Vec<(String, String)>,
     /// Skills that were already up to date (source_name, skill_path).
     pub unchanged: Vec<(String, String)>,
+    /// Modified skills that were merged cleanly.
+    pub merged: Vec<MergeResult>,
+    /// Modified skills where the submodule HEAD matches base_ref (no upstream change).
+    pub up_to_date: Vec<(String, String)>,
+    /// Modified skills that had conflicts during merge.
+    pub conflicted: Vec<MergeResult>,
+}
+
+impl SyncResult {
+    /// Returns true if any base_ref was updated during sync_modified.
+    pub fn any_base_ref_updated(&self) -> bool {
+        self.merged.iter().any(|m| m.new_base_ref != m.old_base_ref)
+    }
+}
+
+/// Result of merging a modified skill.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MergeResult {
+    pub source_name: String,
+    pub skill_path: String,
+    pub old_base_ref: String,
+    /// New base_ref after merge. Same as old_base_ref if there were conflicts
+    /// (base_ref is only updated when all files merge cleanly).
+    pub new_base_ref: String,
+    pub files_merged: Vec<String>,
+    pub files_conflicted: Vec<String>,
 }
 
 /// Sync all unmodified skills from submodules into the bundle directory.
@@ -71,6 +99,281 @@ pub fn sync_unmodified(repo_root: &Path, manifest: &Manifest) -> Result<SyncResu
     }
 
     Ok(result)
+}
+
+/// Sync modified skills from submodules into the bundle directory using 3-way merge.
+///
+/// For each source in the manifest, for each skill where `modified: true`:
+/// 1. Get the submodule's current HEAD SHA.
+/// 2. Resolve base_ref to a SHA.
+/// 3. If SHAs match: skill is up to date, skip.
+/// 4. If SHAs differ: perform 3-way merge per file using `git merge-file`.
+///
+/// `base_ref` is only updated in the manifest when ALL files in a skill merge cleanly.
+/// If any files conflict, `base_ref` is left unchanged so the operator can resolve
+/// and re-run.
+pub fn sync_modified(repo_root: &Path, manifest: &mut Manifest) -> Result<SyncResult> {
+    let sources_root = repo_root.join("sources");
+    let bundle_root = repo_root.join("skills");
+    let mut result = SyncResult::default();
+
+    for source in &mut manifest.sources {
+        let submodule_path = sources_root.join(&source.name);
+
+        for skill in &mut source.skills {
+            if !skill.modified {
+                continue;
+            }
+
+            let base_ref = skill
+                .base_ref
+                .as_ref()
+                .expect("modified skill must have base_ref (validated at load time)");
+
+            let skill_path = &skill.path;
+            let src_skill_dir = submodule_path.join(skill_path);
+            let dst_skill_dir = bundle_root.join(&source.name).join(skill_path);
+
+            // Get current submodule HEAD SHA
+            let current_sha = git::get_submodule_head_sha(repo_root, &source.name)?;
+
+            // Resolve base_ref to SHA
+            let base_sha = git::resolve_ref(&submodule_path, base_ref).with_context(|| {
+                format!(
+                    "failed to resolve base_ref '{}' for skill '{}' in source '{}'",
+                    base_ref, skill_path, source.name
+                )
+            })?;
+
+            let merge_result = if current_sha == base_sha {
+                // Up to date — no changes upstream
+                result
+                    .up_to_date
+                    .push((source.name.clone(), skill_path.clone()));
+                continue;
+            } else if !dst_skill_dir.exists() {
+                // First-time modified skill: not in bundle yet.
+                // Copy from submodule and set base_ref to current HEAD.
+                copy_skill_dir(&src_skill_dir, &dst_skill_dir)?;
+                let old_base_ref = base_ref.clone();
+                skill.base_ref = Some(current_sha.clone());
+                MergeResult {
+                    source_name: source.name.clone(),
+                    skill_path: skill_path.clone(),
+                    old_base_ref,
+                    new_base_ref: current_sha,
+                    files_merged: vec![],
+                    files_conflicted: vec![],
+                }
+            } else {
+                // Perform 3-way merge
+                merge_modified_skill(
+                    &submodule_path,
+                    &src_skill_dir,
+                    &dst_skill_dir,
+                    &source.name,
+                    skill_path,
+                    base_ref,
+                    &current_sha,
+                )?
+            };
+
+            // Update base_ref in manifest if no conflicts
+            if merge_result.files_conflicted.is_empty()
+                && merge_result.new_base_ref != merge_result.old_base_ref
+            {
+                skill.base_ref = Some(merge_result.new_base_ref.clone());
+            }
+
+            if merge_result.files_conflicted.is_empty() {
+                result.merged.push(merge_result);
+            } else {
+                result.conflicted.push(merge_result);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Perform a 3-way merge for a single modified skill.
+///
+/// Enumerates files from BOTH the bundle (ours) and the submodule working tree
+/// (theirs) to catch all cases. For each file:
+/// - Get base content from git history at `base_ref`.
+/// - If base is None (file didn't exist at base_ref):
+///   - If file exists in theirs but not ours: copy theirs into bundle (added upstream)
+///   - If file exists in ours but not theirs: keep as-is (only in modified version)
+/// - If base is Some: run `git merge-file` on (ours, base, theirs).
+fn merge_modified_skill(
+    submodule_path: &Path,
+    _src_skill_dir: &Path,
+    dst_skill_dir: &Path,
+    source_name: &str,
+    skill_path: &str,
+    base_ref: &str,
+    current_sha: &str,
+) -> Result<MergeResult> {
+    let ours_files = collect_file_map(dst_skill_dir)?;
+    // theirs = files in the submodule working tree at src_skill_dir
+    // We need to read from the submodule working tree directly
+    let src_skill_dir = submodule_path.join(skill_path);
+    let theirs_files = collect_file_map(&src_skill_dir)?;
+
+    // Union of all relative file paths from both ours and theirs
+    let mut all_files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    all_files.extend(ours_files.keys().cloned());
+    all_files.extend(theirs_files.keys().cloned());
+
+    let mut files_merged = Vec::new();
+    let mut files_conflicted = Vec::new();
+    let mut has_conflicts = false;
+
+    for rel_path in &all_files {
+        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+        let in_ours = ours_files.contains_key(rel_path);
+        let in_theirs = theirs_files.contains_key(rel_path);
+
+        // Get base content from git history at base_ref
+        let base_content =
+            git::show_file_at_ref(submodule_path, base_ref, &format!("{skill_path}/{rel_str}"))?;
+
+        match (base_content, in_ours, in_theirs) {
+            (None, false, true) => {
+                // File added upstream, not in ours → copy theirs into bundle
+                let dst_file = dst_skill_dir.join(rel_path);
+                if let Some(parent) = dst_file.parent() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("failed to create parent dirs for: {}", dst_file.display())
+                    })?;
+                }
+                let content = &theirs_files[rel_path];
+                fs::write(&dst_file, content).with_context(|| {
+                    format!(
+                        "failed to write added-upstream file: {}",
+                        dst_file.display()
+                    )
+                })?;
+                files_merged.push(rel_str);
+            }
+            (None, true, false) => {
+                // File only in modified version → keep as-is
+                // No action needed
+            }
+            (None, true, true) => {
+                // File exists in both ours and theirs but not at base_ref
+                // (both added independently). Treat as a merge with empty base.
+                let dst_file = dst_skill_dir.join(rel_path);
+                run_merge_file(
+                    &dst_file,
+                    "",
+                    &theirs_files[rel_path],
+                    &rel_str,
+                    &mut files_merged,
+                    &mut files_conflicted,
+                    &mut has_conflicts,
+                )?;
+            }
+            (Some(base), true, true) => {
+                // Standard 3-way merge
+                let dst_file = dst_skill_dir.join(rel_path);
+                let theirs_content = &theirs_files[rel_path];
+                run_merge_file(
+                    &dst_file,
+                    &base,
+                    theirs_content,
+                    &rel_str,
+                    &mut files_merged,
+                    &mut files_conflicted,
+                    &mut has_conflicts,
+                )?;
+            }
+            (Some(_base), false, true) => {
+                // File exists at base_ref and in theirs but was deleted in ours (modified version).
+                // "File deleted in modified version: left deleted (not re-added from upstream)."
+                // So we do nothing — the file stays absent from the bundle.
+            }
+            (Some(_base), true, false) => {
+                // File exists at base_ref and in ours but was deleted upstream.
+                // "File deleted upstream: keep ours as-is, warn."
+                eprintln!(
+                    "warning: file '{}' was deleted upstream in source '{}' — keeping modified version",
+                    rel_str, source_name
+                );
+            }
+            (Some(_), false, false) => {
+                // File existed at base_ref but is deleted in both ours and theirs.
+                // Nothing to do.
+            }
+            (None, false, false) => {
+                // File doesn't exist anywhere — shouldn't happen since we only
+                // iterate files from ours or theirs, but handle gracefully.
+            }
+        }
+    }
+
+    let new_base_ref = if has_conflicts {
+        // Don't update base_ref if there were conflicts
+        base_ref.to_string()
+    } else {
+        current_sha.to_string()
+    };
+
+    Ok(MergeResult {
+        source_name: source_name.to_string(),
+        skill_path: skill_path.to_string(),
+        old_base_ref: base_ref.to_string(),
+        new_base_ref,
+        files_merged,
+        files_conflicted,
+    })
+}
+
+/// Helper: write base and theirs to temp files, run git merge-file, and record results.
+fn run_merge_file(
+    ours_path: &Path,
+    base_content: &str,
+    theirs_content: &[u8],
+    rel_str: &str,
+    files_merged: &mut Vec<String>,
+    files_conflicted: &mut Vec<String>,
+    has_conflicts: &mut bool,
+) -> Result<()> {
+    use std::io::Write;
+
+    let tmp = tempfile::tempdir().context("failed to create temp dir for merge")?;
+    let base_tmp = tmp.path().join("base");
+    let theirs_tmp = tmp.path().join("theirs");
+
+    let mut base_f = fs::File::create(&base_tmp)
+        .with_context(|| format!("failed to create temp base file: {}", base_tmp.display()))?;
+    base_f
+        .write_all(base_content.as_bytes())
+        .with_context(|| "failed to write base content to temp file")?;
+
+    let mut theirs_f = fs::File::create(&theirs_tmp).with_context(|| {
+        format!(
+            "failed to create temp theirs file: {}",
+            theirs_tmp.display()
+        )
+    })?;
+    theirs_f
+        .write_all(theirs_content)
+        .with_context(|| "failed to write theirs content to temp file")?;
+
+    let outcome = git::merge_file(ours_path, &base_tmp, &theirs_tmp)?;
+
+    match outcome {
+        git::MergeOutcome::Clean => {
+            files_merged.push(rel_str.to_string());
+        }
+        git::MergeOutcome::Conflicts(_) => {
+            files_conflicted.push(rel_str.to_string());
+            *has_conflicts = true;
+        }
+    }
+
+    Ok(())
 }
 
 /// Remove the destination skill directory if it exists, then recursively copy
@@ -647,5 +950,322 @@ mod tests {
     #[test]
     fn test_pathbuf_unused() {
         let _: PathBuf = PathBuf::from("x");
+    }
+
+    // ── sync_modified tests ──────────────────────────────────────────
+
+    use std::process::Command as StdCommand;
+
+    /// Helper: init a git repo at the given path with identity configured.
+    fn init_git_repo(path: &Path) {
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["init"])
+            .status()
+            .expect("git init failed");
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["config", "user.email", "test@example.com"])
+            .status()
+            .expect("git config email failed");
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["config", "user.name", "Test"])
+            .status()
+            .expect("git config name failed");
+    }
+
+    /// Helper: commit all changes in a git repo at the given path.
+    fn git_commit(path: &Path, msg: &str) {
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add failed");
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg])
+            .status()
+            .expect("git commit failed");
+    }
+
+    /// Helper: get HEAD SHA of a git repo.
+    fn git_head_sha(path: &Path) -> String {
+        let output = StdCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    /// Set up a repo with a source that is a real git repo with two commits.
+    /// Returns (root_tempdir, base_sha, head_sha).
+    /// The source repo at sources/<source>/<skill> has:
+    ///   - commit 1 (base): file.txt with "line1\nline2\nline3\n"
+    ///   - commit 2 (head): file.txt with "line1\nline2\nTHEIRS\n"
+    fn setup_repo_with_git_history(source: &str, skill: &str) -> (TempDir, String, String) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Create the repo structure
+        fs::create_dir_all(root.join("sources").join(source).join(skill)).unwrap();
+        fs::create_dir_all(root.join("skills")).unwrap();
+
+        // Init git repo in sources/<source>
+        let source_repo = root.join("sources").join(source);
+        init_git_repo(&source_repo);
+
+        // Commit 1 (base): create the skill file
+        write_file(
+            root,
+            &format!("sources/{source}/{skill}/file.txt"),
+            "line1\nline2\nline3\n",
+        );
+        git_commit(&source_repo, "initial");
+        let base_sha = git_head_sha(&source_repo);
+
+        // Commit 2 (head): modify the file upstream
+        write_file(
+            root,
+            &format!("sources/{source}/{skill}/file.txt"),
+            "line1\nline2\nTHEIRS\n",
+        );
+        git_commit(&source_repo, "upstream change");
+        let head_sha = git_head_sha(&source_repo);
+
+        (dir, base_sha, head_sha)
+    }
+
+    #[test]
+    fn test_sync_modified_up_to_date() {
+        let (dir, base_sha, head_sha) = setup_repo_with_git_history("src1", "my-skill");
+        let root = dir.path();
+
+        // base_ref = head_sha, so skill is up to date
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &head_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        assert_eq!(result.up_to_date.len(), 1);
+        assert_eq!(result.merged.len(), 0);
+        assert_eq!(result.conflicted.len(), 0);
+        // base_ref should NOT be updated (was already at head)
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(head_sha.as_str())
+        );
+        let _ = base_sha; // suppress unused warning
+    }
+
+    #[test]
+    fn test_sync_modified_clean_merge() {
+        let (dir, base_sha, head_sha) = setup_repo_with_git_history("src1", "my-skill");
+        let root = dir.path();
+
+        // Create the "ours" version in the bundle with a different change (line 1)
+        write_file(
+            root,
+            "skills/src1/my-skill/file.txt",
+            "OURS\nline2\nline3\n",
+        );
+
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &base_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        assert_eq!(result.merged.len(), 1);
+        assert_eq!(result.conflicted.len(), 0);
+        assert_eq!(result.up_to_date.len(), 0);
+
+        // base_ref should be updated to head_sha
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(head_sha.as_str())
+        );
+
+        // The merged file should contain both OURS and THEIRS
+        let merged = read_file(root, "skills/src1/my-skill/file.txt");
+        assert!(merged.contains("OURS"));
+        assert!(merged.contains("THEIRS"));
+        assert!(!merged.contains("<<<<<<<"));
+    }
+
+    #[test]
+    fn test_sync_modified_conflict() {
+        let (dir, base_sha, head_sha) = setup_repo_with_git_history("src1", "my-skill");
+        let root = dir.path();
+
+        // Create "ours" with a conflicting change to the same line (line 3)
+        write_file(
+            root,
+            "skills/src1/my-skill/file.txt",
+            "line1\nline2\nOURS\n",
+        );
+
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &base_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        assert_eq!(result.conflicted.len(), 1);
+        assert_eq!(result.merged.len(), 0);
+
+        // base_ref should NOT be updated (conflicts)
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(base_sha.as_str())
+        );
+
+        // The file should contain conflict markers
+        let merged = read_file(root, "skills/src1/my-skill/file.txt");
+        assert!(merged.contains("<<<<<<<"), "expected conflict markers");
+        let _ = head_sha;
+    }
+
+    #[test]
+    fn test_sync_modified_file_added_upstream() {
+        // Setup: base has file.txt, head adds new_file.txt
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let source = "src1";
+        let skill = "my-skill";
+
+        fs::create_dir_all(root.join("sources").join(source).join(skill)).unwrap();
+        fs::create_dir_all(root.join("skills").join(source).join(skill)).unwrap();
+
+        let source_repo = root.join("sources").join(source);
+        init_git_repo(&source_repo);
+
+        // Commit 1 (base): file.txt only
+        write_file(
+            root,
+            &format!("sources/{source}/{skill}/file.txt"),
+            "line1\nline2\nline3\n",
+        );
+        git_commit(&source_repo, "initial");
+        let base_sha = git_head_sha(&source_repo);
+
+        // Commit 2 (head): add new_file.txt
+        write_file(
+            root,
+            &format!("sources/{source}/{skill}/new_file.txt"),
+            "new content\n",
+        );
+        git_commit(&source_repo, "add new file");
+        let head_sha = git_head_sha(&source_repo);
+
+        // Create "ours" version — only file.txt (modified), no new_file.txt
+        write_file(
+            root,
+            "skills/src1/my-skill/file.txt",
+            "OURS\nline2\nline3\n",
+        );
+
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &base_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        assert_eq!(result.merged.len(), 1);
+        assert_eq!(result.conflicted.len(), 0);
+
+        // The new file should have been copied into the bundle
+        assert!(exists(root, "skills/src1/my-skill/new_file.txt"));
+        assert_eq!(
+            read_file(root, "skills/src1/my-skill/new_file.txt"),
+            "new content\n"
+        );
+
+        // base_ref should be updated
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(head_sha.as_str())
+        );
+    }
+
+    #[test]
+    fn test_sync_modified_file_only_in_modified() {
+        let (dir, base_sha, head_sha) = setup_repo_with_git_history("src1", "my-skill");
+        let root = dir.path();
+
+        // Create "ours" with an extra file that's not in upstream
+        write_file(
+            root,
+            "skills/src1/my-skill/file.txt",
+            "OURS\nline2\nline3\n",
+        );
+        write_file(root, "skills/src1/my-skill/extra.txt", "extra content\n");
+
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &base_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        assert_eq!(result.merged.len(), 1);
+        assert_eq!(result.conflicted.len(), 0);
+
+        // The extra file should still be there
+        assert!(exists(root, "skills/src1/my-skill/extra.txt"));
+        assert_eq!(
+            read_file(root, "skills/src1/my-skill/extra.txt"),
+            "extra content\n"
+        );
+
+        // base_ref should be updated
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(head_sha.as_str())
+        );
+    }
+
+    #[test]
+    fn test_sync_modified_first_time_not_in_bundle() {
+        let (dir, base_sha, head_sha) = setup_repo_with_git_history("src1", "my-skill");
+        let root = dir.path();
+
+        // Don't create the bundle directory — simulate first-time modified skill
+
+        let mut manifest = make_manifest(vec![Source {
+            name: "src1".to_string(),
+            skills: vec![SkillEntry::modified("my-skill", &base_sha)],
+        }]);
+
+        let result = sync_modified(root, &mut manifest).unwrap();
+
+        // Should be treated as merged (copied from submodule)
+        assert_eq!(result.merged.len(), 1);
+        assert_eq!(result.conflicted.len(), 0);
+
+        // The file should exist in the bundle
+        assert!(exists(root, "skills/src1/my-skill/file.txt"));
+        assert_eq!(
+            read_file(root, "skills/src1/my-skill/file.txt"),
+            "line1\nline2\nTHEIRS\n"
+        );
+
+        // base_ref should be set to current HEAD
+        assert_eq!(
+            manifest.sources[0].skills[0].base_ref.as_deref(),
+            Some(head_sha.as_str())
+        );
     }
 }
