@@ -1,5 +1,6 @@
 mod git;
 mod manifest;
+mod sync;
 
 use std::path::PathBuf;
 
@@ -36,14 +37,19 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Sync { source } => {
             let repo_root = find_repo_root()?;
-            let _manifest = manifest::Manifest::load(&repo_root)?;
+            let manifest = manifest::Manifest::load(&repo_root)?;
             match source {
                 Some(name) => {
                     let sha = git::get_submodule_head_sha(&repo_root, &name)?;
                     println!("{name}: {sha}");
                 }
                 None => {
-                    println!("sync: manifest loaded, bundle sync not yet implemented");
+                    let result = sync::sync_unmodified(&repo_root, &manifest)?;
+                    println!(
+                        "synced {} skills, {} unchanged",
+                        result.synced.len(),
+                        result.unchanged.len()
+                    );
                 }
             }
         }
