@@ -66,6 +66,21 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// Serialize the manifest back to `skills-manifest.yaml` at the repo root.
+    ///
+    /// This is used to write back updated `base_ref` values after a successful
+    /// merge. Note that serde_yaml re-serialization drops any comments that
+    /// were present in the original file — this is an accepted trade-off.
+    pub fn save(&self, repo_root: &Path) -> Result<()> {
+        let manifest_path = repo_root.join("skills-manifest.yaml");
+        let yaml =
+            serde_yaml::to_string(self).with_context(|| "failed to serialize manifest to YAML")?;
+        std::fs::write(&manifest_path, yaml).with_context(|| {
+            format!("failed to write manifest file: {}", manifest_path.display())
+        })?;
+        Ok(())
+    }
+
     /// Validate the manifest, returning an error with a clear message if invalid.
     pub fn validate(&self) -> Result<()> {
         let mut seen_sources = std::collections::HashSet::new();
