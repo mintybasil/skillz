@@ -1,0 +1,35 @@
+# Example skills-manifest.yaml
+#
+# This file tracks which skills to include from each external source (git submodule)
+# and modification metadata. Source URLs and refs are managed by git submodules
+# (.gitmodules), so they are NOT duplicated here.
+#
+# Copy this file to skills-manifest.yaml and edit for your setup.
+
+sources:
+  # Each source maps to a git submodule at sources/<name>.
+  - name: hermes-skills
+    skills:
+      # Unmodified skill: copied directly from the submodule on each sync.
+      - path: devops/kanban-orchestrator
+        modified: false
+
+      # Modified skill: has local changes (e.g., for Hermes compatibility).
+      # base_ref is the upstream ref the modifications were made against.
+      # It's used as the merge base when upstream changes are pulled.
+      # mod_tags describe the nature of modifications:
+      #   - hermes-compat: changes for Hermes agent harness compatibility
+      #   - personalization: changes for operator preferences/customizations
+      - path: mlops/inference/llama-cpp
+        modified: true
+        base_ref: v1.2.3
+        mod_tags: [hermes-compat]
+
+      # A skill with both compatibility and personalization changes.
+      - path: productivity/notion
+        modified: true
+        base_ref: v1.1.0
+        mod_tags: [hermes-compat, personalization]
+
+# Locally-created skills are NOT listed here.
+# Place them in skills/mintybasil/ — they are included automatically.
