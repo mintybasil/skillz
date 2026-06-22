@@ -101,7 +101,7 @@ fn parse_skill_frontmatter(skill_md_path: &Path) -> Result<(String, String)> {
 }
 
 /// Extract a simple top-level YAML field value (handles quoted and unquoted strings).
-/// Also handles multi-line values that start with `>` (YAML folded/literal block).
+/// Also handles multi-line values that start with `>` (YAML folded block scalar).
 fn extract_yaml_field(yaml: &str, field: &str) -> Option<String> {
     let lines: Vec<&str> = yaml.lines().collect();
     for (i, line) in lines.iter().enumerate() {
@@ -109,28 +109,28 @@ fn extract_yaml_field(yaml: &str, field: &str) -> Option<String> {
         if let Some(rest) = trimmed.strip_prefix(&format!("{field}:")) {
             let value = rest.trim();
 
-            // Multi-line value starting with >
-            if value == ">" || value.starts_with(">-") || value.starts_with(">-") {
-                // Collect subsequent lines until the next top-level field or end
+            // Multi-line value starting with > (YAML folded block scalar)
+            if value == ">" || value.starts_with(">-") {
+                // Collect subsequent lines: they are indented continuation lines.
+                // Stop when we hit a line at column 0 (a new top-level field) or end of content.
                 let mut desc_lines = Vec::new();
                 for &next_line in &lines[i + 1..] {
                     let next_trimmed = next_line.trim();
-                    // Stop if we hit a new top-level field (word followed by colon)
-                    if !next_trimmed.is_empty()
-                        && !next_trimmed.starts_with(' ')
-                        && !next_trimmed.starts_with('\t')
-                        && next_trimmed.contains(':')
-                        && !next_trimmed.starts_with('-')
-                        && !next_trimmed.starts_with('>')
-                    {
+
+                    // Empty line: part of the block (paragraph break in folded mode)
+                    if next_trimmed.is_empty() {
+                        desc_lines.push("");
+                        continue;
+                    }
+
+                    // If the original line starts at column 0 (no indentation),
+                    // it's a new top-level YAML field — stop.
+                    if !next_line.starts_with(' ') && !next_line.starts_with('\t') {
                         break;
                     }
-                    if next_trimmed.is_empty() {
-                        // Keep empty lines within the block, but stop at double empty
-                        desc_lines.push("");
-                    } else {
-                        desc_lines.push(next_trimmed);
-                    }
+
+                    // Indented line: part of the description
+                    desc_lines.push(next_trimmed);
                 }
                 // Trim trailing empty lines
                 while desc_lines.last().is_some_and(|s| s.is_empty()) {
@@ -653,6 +653,27 @@ mod tests {
         assert_eq!(name, "multi-desc");
         assert!(desc.contains("amazing things"));
         assert!(desc.contains("multiple lines"));
+    }
+
+    #[test]
+    fn test_parse_skill_frontmatter_multiline_with_colon_in_text() {
+        // Reproduces the rust-best-practices case where a line inside the
+        // folded block contains a colon (e.g., "Use this skill when:")
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path().join("rust-bp");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: rust-best-practices\ndescription: >\n  Guide for writing idiomatic Rust code based on best practices handbook. Use this skill when:\n  (1) writing new Rust code or functions,\n  (2) reviewing or refactoring existing Rust code.\nlicense: MIT\n---\n# Content\n",
+        )
+        .unwrap();
+
+        let (name, desc) = parse_skill_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
+        assert_eq!(name, "rust-best-practices");
+        assert!(desc.contains("idiomatic Rust"));
+        assert!(desc.contains("Use this skill when:"));
+        assert!(desc.contains("writing new Rust code"));
+        assert!(desc.contains("reviewing or refactoring"));
     }
 
     #[test]
