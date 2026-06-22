@@ -275,7 +275,7 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
 /// Display a toggle list and let the user select items.
 /// Uses crossterm raw mode for character-at-a-time key handling.
 fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
-    use crossterm::event::{self, Event, KeyCode, KeyEvent};
+    use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use crossterm::terminal;
 
     let mut selected: Vec<bool> = vec![false; skills.len()];
@@ -294,18 +294,39 @@ fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
             }
 
             let event = event::read()?;
-            let Event::Key(KeyEvent { code, .. }) = event else {
+            let Event::Key(KeyEvent {
+                code,
+                kind,
+                modifiers,
+                ..
+            }) = event
+            else {
                 continue;
             };
+
+            // Only handle key press events (not release/repeat on some terminals)
+            if kind != KeyEventKind::Press && kind != KeyEventKind::Repeat {
+                continue;
+            }
+
+            // Ctrl+C exits immediately
+            if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+                return Ok(Vec::new());
+            }
 
             match code {
                 KeyCode::Enter => break,
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    println!();
                     return Ok(Vec::new());
                 }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
-                    selected.fill(true);
+                    // Toggle: select all if not all selected, unselect all if all selected
+                    let all_selected = selected.iter().all(|&s| s);
+                    if all_selected {
+                        selected.fill(false);
+                    } else {
+                        selected.fill(true);
+                    }
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if cursor + 1 < skills.len() {
@@ -340,44 +361,61 @@ fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
             .map(|(s, _)| s.clone())
             .collect();
 
-        // Move cursor below the list before returning
-        println!();
-
         Ok(result)
     })();
 
-    // Always disable raw mode
+    // Always disable raw mode and print newline
     let _ = terminal::disable_raw_mode();
-    // Print a newline to move below the list
     println!();
 
     result
 }
 
 fn print_toggle_list(skills: &[FoundSkill], selected: &[bool], cursor: usize) {
-    // Clear screen
-    print!("\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
+    use crossterm::cursor;
+    use crossterm::execute;
+    use crossterm::terminal;
 
-    println!("Select skills to import (Space to toggle, 'a' for all, Enter to confirm):\n");
-    for (i, skill) in skills.iter().enumerate() {
+    // Clear screen and move cursor to top-left
+    let _ = execute!(
+        io::stdout(),
+        terminal::Clear(terminal::ClearType::All),
+        cursor::MoveTo(0, 0)
+    );
+
+    let lines: Vec<String> = std::iter::once(
+        "Select skills to import (Space to toggle, 'a' to toggle all, Enter to confirm, Ctrl+C to cancel)\r"
+        .to_string(),
+    )
+    .chain(std::iter::once(String::new()))
+    .chain(skills.iter().enumerate().flat_map(|(i, skill)| {
         let marker = if selected[i] { "[x]" } else { "[ ]" };
-        let cursor_marker = if i == cursor { "▶" } else { " " };
-        println!(
-            "{} {} {:<50} {}",
-            cursor_marker,
-            marker,
-            skill.path,
-            if skill.name.is_empty() {
-                ""
-            } else {
-                &skill.name
-            }
-        );
+        let cursor_marker = if i == cursor { ">" } else { " " };
+        let mut lines = Vec::new();
+
+        let name_display = if skill.name.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", skill.name)
+        };
+
+        lines.push(format!(
+            "{} {} {:<50}{}\r",
+            cursor_marker, marker, skill.path, name_display
+        ));
+
         if !skill.description.is_empty() {
-            println!("       {}", skill.description);
+            lines.push(format!("      {}\r", skill.description));
         }
-    }
+
+        lines
+    }))
+    .collect();
+
+    // Write all lines at once
+    let output = lines.join("\n");
+    print!("{}", output);
+    let _ = io::stdout().flush();
 }
 
 /// Run the `lint` command: validate the manifest and report any issues.
