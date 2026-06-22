@@ -55,8 +55,29 @@ Locally-created skills go in `skills/mintybasil/` and are included automatically
 ## Usage
 
 ```bash
-cargo run -- sync    # Build/rebuild the skill bundle
-cargo run -- init    # Create minimal manifest and directory structure
+cargo run -- sync                        # Build/rebuild the skill bundle
+cargo run -- sync --source hermes-skills  # Print current HEAD SHA for a source
+cargo run -- import sources/my-source     # Import skills from a path into the manifest
+cargo run -- lint                         # Validate the manifest and check for issues
+cargo run -- init                         # Create minimal manifest and directory structure
+```
+
+### `import`
+
+Scans a path for skill directories (directories containing `SKILL.md`), displays a toggle list with each skill's name and description from its frontmatter, and adds selected skills to the manifest. The source name is auto-detected from the git submodule root, and `base_path` is set to the relative path from the git root to the scanned path.
+
+```bash
+cargo run -- import hermes-agent/skills
+```
+
+Controls: arrow keys or `j`/`k` to navigate, `Space` to toggle, `a` to toggle all, `Enter` to confirm, `Ctrl+C` or `q` to cancel.
+
+### `lint`
+
+Validates the manifest for parsing errors and common issues (missing submodule directories, skills not found in submodules). Reports source count, total skills, and modified skills.
+
+```bash
+cargo run -- lint
 ```
 
 ## License
