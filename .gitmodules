@@ -1,0 +1,6 @@
+[submodule "sources/superpowers"]
+	path = sources/superpowers
+	url = https://github.com/obra/superpowers
+[submodule "sources/hermes-agent"]
+	path = sources/hermes-agent
+	url = https://github.com/NousResearch/hermes-agent
