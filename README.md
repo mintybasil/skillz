@@ -70,7 +70,7 @@ Scans a path for skill directories (directories containing `SKILL.md`), displays
 cargo run -- import hermes-agent/skills
 ```
 
-Controls: `j`/`k` to navigate, `Space` to toggle, `a` to select all, `Enter` to confirm, `q` to cancel.
+Controls: arrow keys or `j`/`k` to navigate, `Space` to toggle, `a` to select all, `Enter` to confirm, `q` to cancel.
 
 ### `lint`
 

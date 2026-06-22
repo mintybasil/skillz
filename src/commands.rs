@@ -1,7 +1,7 @@
 //! Import and lint commands for manifest management.
 
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -273,85 +273,85 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
 }
 
 /// Display a toggle list and let the user select items.
+/// Uses crossterm raw mode for character-at-a-time key handling.
 fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
-    let mut selected: Vec<bool> = vec![false; skills.len()];
+    use crossterm::event::{self, Event, KeyCode, KeyEvent};
+    use crossterm::terminal;
 
-    let stdin = io::stdin();
+    let mut selected: Vec<bool> = vec![false; skills.len()];
     let mut cursor = 0usize;
 
-    // Clear screen and display
-    print_toggle_list(skills, &selected, cursor);
+    // Enter raw mode
+    terminal::enable_raw_mode().context("failed to enable raw mode")?;
 
-    println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
+    // Ensure we disable raw mode no matter what
+    let result = (|| -> Result<Vec<FoundSkill>> {
+        loop {
+            print_toggle_list(skills, &selected, cursor);
 
-    // Read input character by character
-    let mut input = String::new();
-    loop {
-        input.clear();
-        if stdin.lock().read_line(&mut input)? == 0 {
-            // EOF
-            break;
-        }
+            if !event::poll(std::time::Duration::from_millis(500))? {
+                continue;
+            }
 
-        let trimmed = input.trim();
-        match trimmed {
-            "" => {
-                // Enter — confirm selection
-                break;
-            }
-            "q" | "Q" => {
-                println!("Cancelled.");
-                return Ok(Vec::new());
-            }
-            "a" | "A" => {
-                // Select all
-                selected.fill(true);
-                print_toggle_list(skills, &selected, cursor);
-                println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
-            }
-            "j" | "down" => {
-                if cursor + 1 < skills.len() {
-                    cursor += 1;
+            let event = event::read()?;
+            let Event::Key(KeyEvent { code, .. }) = event else {
+                continue;
+            };
+
+            match code {
+                KeyCode::Enter => break,
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    println!();
+                    return Ok(Vec::new());
                 }
-                print_toggle_list(skills, &selected, cursor);
-                println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
-            }
-            "k" | "up" => {
-                if cursor > 0 {
-                    cursor = cursor.saturating_sub(1);
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    selected.fill(true);
                 }
-                print_toggle_list(skills, &selected, cursor);
-                println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
-            }
-            " " | "space" | "toggle" => {
-                selected[cursor] = !selected[cursor];
-                if cursor + 1 < skills.len() {
-                    cursor += 1;
-                }
-                print_toggle_list(skills, &selected, cursor);
-                println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
-            }
-            _ => {
-                // Try to parse a number for direct selection
-                if let Ok(n) = trimmed.parse::<usize>() {
-                    if n > 0 && n <= skills.len() {
-                        selected[n - 1] = !selected[n - 1];
-                        print_toggle_list(skills, &selected, cursor);
-                        println!("\nControls: ↑/↓ to navigate, Space to toggle, 'a' to select all, Enter to confirm, q to cancel");
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if cursor + 1 < skills.len() {
+                        cursor += 1;
                     }
                 }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    cursor = cursor.saturating_sub(1);
+                }
+                KeyCode::Char(' ') => {
+                    selected[cursor] = !selected[cursor];
+                    if cursor + 1 < skills.len() {
+                        cursor += 1;
+                    }
+                }
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    if let Some(n) = c.to_digit(10) {
+                        let idx = n as usize;
+                        if idx > 0 && idx <= skills.len() {
+                            selected[idx - 1] = !selected[idx - 1];
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-    }
 
-    let result: Vec<FoundSkill> = skills
-        .iter()
-        .zip(&selected)
-        .filter(|(_, &sel)| sel)
-        .map(|(s, _)| s.clone())
-        .collect();
+        let result: Vec<FoundSkill> = skills
+            .iter()
+            .zip(&selected)
+            .filter(|(_, &sel)| sel)
+            .map(|(s, _)| s.clone())
+            .collect();
 
-    Ok(result)
+        // Move cursor below the list before returning
+        println!();
+
+        Ok(result)
+    })();
+
+    // Always disable raw mode
+    let _ = terminal::disable_raw_mode();
+    // Print a newline to move below the list
+    println!();
+
+    result
 }
 
 fn print_toggle_list(skills: &[FoundSkill], selected: &[bool], cursor: usize) {
