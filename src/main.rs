@@ -3,6 +3,7 @@ mod git;
 mod manifest;
 mod report;
 mod sync;
+mod tui;
 
 use std::path::PathBuf;
 
