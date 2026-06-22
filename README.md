@@ -56,8 +56,11 @@ Locally-created skills go in `skills/mintybasil/` and are included automatically
 ## Usage
 
 ```bash
-cargo run -- sync              # Build/rebuild the skill bundle
-cargo run -- sync --source X    # Print current HEAD SHA for source X
+cargo run -- sync                        # Build/rebuild the skill bundle
+cargo run -- sync --source hermes-skills  # Print current HEAD SHA for a source
+cargo run -- import sources/my-source     # Import skills from a path into the manifest
+cargo run -- lint                         # Validate the manifest and check for issues
+cargo run -- init                         # Create minimal manifest and directory structure
 ```
 
 ## Documentation
