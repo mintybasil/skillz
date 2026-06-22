@@ -1,7 +1,6 @@
 //! Import and lint commands for manifest management.
 
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -42,6 +41,7 @@ fn find_skills(search_path: &Path) -> Result<Vec<FoundSkill>> {
                 path: relative,
                 name,
                 description,
+                skill_md_path: skill_md.clone(),
             });
         }
     }
@@ -54,7 +54,10 @@ fn find_skills(search_path: &Path) -> Result<Vec<FoundSkill>> {
 pub struct FoundSkill {
     pub path: String,
     pub name: String,
+    #[allow(dead_code)]
     pub description: String,
+    /// Absolute path to the SKILL.md file.
+    pub skill_md_path: PathBuf,
 }
 
 /// Parse the YAML frontmatter from a SKILL.md file.
@@ -226,7 +229,7 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
         base_path.as_deref().unwrap_or("(root)")
     );
 
-    let selected = toggle_select(&found_skills)?;
+    let selected = crate::tui::run_toggle_select(&found_skills)?;
 
     if selected.is_empty() {
         println!("No skills selected. Exiting.");
@@ -308,154 +311,6 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Display a toggle list and let the user select items.
-/// Uses crossterm raw mode + alternate screen buffer for clean terminal handling.
-fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
-    use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    use crossterm::execute;
-    use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-
-    let mut selected: Vec<bool> = vec![false; skills.len()];
-    let mut cursor = 0usize;
-
-    // Enter alternate screen + raw mode
-    execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
-    terminal::enable_raw_mode().context("failed to enable raw mode")?;
-
-    // Ensure we restore terminal state no matter what
-    let result = (|| -> Result<Vec<FoundSkill>> {
-        loop {
-            print_toggle_list(skills, &selected, cursor);
-
-            if !event::poll(std::time::Duration::from_millis(500))? {
-                continue;
-            }
-
-            let event = event::read()?;
-            let Event::Key(KeyEvent {
-                code,
-                kind,
-                modifiers,
-                ..
-            }) = event
-            else {
-                continue;
-            };
-
-            // Only handle key press events (not release/repeat on some terminals)
-            if kind != KeyEventKind::Press && kind != KeyEventKind::Repeat {
-                continue;
-            }
-
-            // Ctrl+C exits immediately
-            if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
-                return Ok(Vec::new());
-            }
-
-            match code {
-                KeyCode::Enter => break,
-                KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    return Ok(Vec::new());
-                }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    // Toggle: select all if not all selected, unselect all if all selected
-                    let all_selected = selected.iter().all(|&s| s);
-                    if all_selected {
-                        selected.fill(false);
-                    } else {
-                        selected.fill(true);
-                    }
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if cursor + 1 < skills.len() {
-                        cursor += 1;
-                    }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    cursor = cursor.saturating_sub(1);
-                }
-                KeyCode::Char(' ') => {
-                    selected[cursor] = !selected[cursor];
-                    if cursor + 1 < skills.len() {
-                        cursor += 1;
-                    }
-                }
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    if let Some(n) = c.to_digit(10) {
-                        let idx = n as usize;
-                        if idx > 0 && idx <= skills.len() {
-                            selected[idx - 1] = !selected[idx - 1];
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let result: Vec<FoundSkill> = skills
-            .iter()
-            .zip(&selected)
-            .filter(|(_, &sel)| sel)
-            .map(|(s, _)| s.clone())
-            .collect();
-
-        Ok(result)
-    })();
-
-    // Always restore: disable raw mode, leave alternate screen
-    let _ = terminal::disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
-
-    result
-}
-
-fn print_toggle_list(skills: &[FoundSkill], selected: &[bool], cursor: usize) {
-    use crossterm::cursor;
-    use crossterm::execute;
-    use crossterm::terminal;
-
-    // Clear screen and move cursor to top-left
-    let _ = execute!(
-        io::stdout(),
-        terminal::Clear(terminal::ClearType::All),
-        cursor::MoveTo(0, 0)
-    );
-
-    let lines: Vec<String> = std::iter::once(
-        "Select skills to import (Space to toggle, 'a' to toggle all, Enter to confirm, Ctrl+C to cancel)\r"
-        .to_string(),
-    )
-    .chain(std::iter::once(String::new()))
-    .chain(skills.iter().enumerate().flat_map(|(i, skill)| {
-        let marker = if selected[i] { "[x]" } else { "[ ]" };
-        let cursor_marker = if i == cursor { ">" } else { " " };
-        let mut lines = Vec::new();
-
-        let name_display = if skill.name.is_empty() {
-            String::new()
-        } else {
-            format!(" — {}", skill.name)
-        };
-
-        lines.push(format!(
-            "{} {} {:<50}{}\r",
-            cursor_marker, marker, skill.path, name_display
-        ));
-
-        if !skill.description.is_empty() {
-            lines.push(format!("      {}\r", skill.description));
-        }
-
-        lines
-    }))
-    .collect();
-
-    // Write all lines at once
-    let output = lines.join("\n");
-    print!("{}", output);
-    let _ = io::stdout().flush();
 }
 
 /// Run the `lint` command: validate the manifest and report any issues.
