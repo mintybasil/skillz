@@ -46,7 +46,7 @@ pub struct SkillEntry {
     /// Path within the source repo (e.g., `devops/kanban-orchestrator`).
     pub path: String,
     /// Whether this skill has local modifications.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub modified: bool,
     /// Tags describing the nature of modifications.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -391,5 +391,50 @@ sources:
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0], ModTag::HermesCompat);
         assert_eq!(tags[1], ModTag::Personalization);
+    }
+
+    #[test]
+    fn test_serialization_skips_modified_false() {
+        let manifest = Manifest {
+            sources: vec![Source {
+                name: "test".to_string(),
+                ref_: None,
+                base_path: None,
+                skills: vec![SkillEntry {
+                    path: "skill-a".to_string(),
+                    modified: false,
+                    mod_tags: None,
+                }],
+            }],
+        };
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        assert!(
+            !yaml.contains("modified: false"),
+            "modified: false should not be serialized, got: {}",
+            yaml
+        );
+        assert!(yaml.contains("path: skill-a"));
+    }
+
+    #[test]
+    fn test_serialization_includes_modified_true() {
+        let manifest = Manifest {
+            sources: vec![Source {
+                name: "test".to_string(),
+                ref_: Some("v1.0.0".to_string()),
+                base_path: None,
+                skills: vec![SkillEntry {
+                    path: "skill-a".to_string(),
+                    modified: true,
+                    mod_tags: Some(vec![ModTag::HermesCompat]),
+                }],
+            }],
+        };
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        assert!(
+            yaml.contains("modified: true"),
+            "modified: true should be serialized, got: {}",
+            yaml
+        );
     }
 }
