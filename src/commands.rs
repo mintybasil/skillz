@@ -311,18 +311,20 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
 }
 
 /// Display a toggle list and let the user select items.
-/// Uses crossterm raw mode for character-at-a-time key handling.
+/// Uses crossterm raw mode + alternate screen buffer for clean terminal handling.
 fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
     use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    use crossterm::terminal;
+    use crossterm::execute;
+    use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
     let mut selected: Vec<bool> = vec![false; skills.len()];
     let mut cursor = 0usize;
 
-    // Enter raw mode
+    // Enter alternate screen + raw mode
+    execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
     terminal::enable_raw_mode().context("failed to enable raw mode")?;
 
-    // Ensure we disable raw mode no matter what
+    // Ensure we restore terminal state no matter what
     let result = (|| -> Result<Vec<FoundSkill>> {
         loop {
             print_toggle_list(skills, &selected, cursor);
@@ -402,9 +404,9 @@ fn toggle_select(skills: &[FoundSkill]) -> Result<Vec<FoundSkill>> {
         Ok(result)
     })();
 
-    // Always disable raw mode and print newline
+    // Always restore: disable raw mode, leave alternate screen
     let _ = terminal::disable_raw_mode();
-    println!();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
 
     result
 }
