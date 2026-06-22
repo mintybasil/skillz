@@ -214,7 +214,8 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
     };
 
     // Find skills under the search path
-    let found_skills = find_skills(&abs_search)?;
+    let mut found_skills = find_skills(&abs_search)?;
+    found_skills.sort_by(|a, b| a.path.cmp(&b.path));
 
     if found_skills.is_empty() {
         println!("No skills found under {}", abs_search.display());

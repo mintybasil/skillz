@@ -67,7 +67,3 @@ cargo run -- init                         # Create minimal manifest and director
 
 - [PRD](docs/PRD.md) — Product requirements document
 - [Example manifest](skills-manifest.yaml.example) — Annotated manifest template
-
-## License
-
-MIT
