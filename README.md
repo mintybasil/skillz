@@ -30,15 +30,25 @@ cargo run -- sync
 ```yaml
 sources:
   - name: my-source              # maps to submodule path sources/my-source
+    ref: v1.0.0                   # upstream ref modifications are based on (required if any skill is modified)
+    base_path: skills             # optional: subdirectory in the source repo where skills live
     skills:
-      - path: category/skill-a   # path within the source repo
+      - path: category/skill-a   # path within the source repo (relative to base_path if set)
         modified: false
 
       - path: category/skill-b
         modified: true
-        base_ref: v1.0.0         # upstream ref modifications are based on
         mod_tags: [hermes-compat] # nature of modifications
 ```
+
+### Fields
+
+- **`name`**: Maps to the submodule path `sources/<name>`. The same name may appear multiple times with different `base_path` values.
+- **`ref`**: The upstream ref that modifications are based on. Required when any skill in the source is marked `modified`. Serves as the base for 3-way merge. Updated after clean merges.
+- **`base_path`** (optional): Subdirectory within the source repo where skills are located. When set, skill paths are relative to `sources/<name>/<base_path>/<skill_path>`. When empty or unset, skill paths are relative to `sources/<name>/<skill_path>`.
+- **`path`**: Path within the source repo (relative to `base_path` if set).
+- **`modified`**: Whether this skill has local modifications.
+- **`mod_tags`**: Tags describing the nature of modifications (e.g., `hermes-compat`, `personalization`).
 
 Locally-created skills go in `skills/mintybasil/` and are included automatically — no manifest entry needed.
 

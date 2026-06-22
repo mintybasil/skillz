@@ -85,9 +85,9 @@ pub fn write_sync_report<W: Write>(
             writeln!(writer, "  {}/{}", m.source_name, m.skill_path)?;
             writeln!(
                 writer,
-                "    base_ref: {} \u{2192} {}",
-                short_sha(&m.old_base_ref),
-                short_sha(&m.new_base_ref)
+                "    ref: {} \u{2192} {}",
+                short_sha(&m.old_ref),
+                short_sha(&m.new_ref)
             )?;
             if !m.files_merged.is_empty() {
                 writeln!(writer, "    files merged: {}", m.files_merged.join(", "))?;
@@ -127,11 +127,11 @@ pub fn write_sync_report<W: Write>(
 
     // Drift warnings
     if !result.drift_warnings.is_empty() {
-        for (source_name, skill_path, base_ref) in &result.drift_warnings {
+        for (source_name, skill_path, ref_) in &result.drift_warnings {
             writeln!(
                 writer,
-                "WARNING: base_ref '{}' for skill '{}' in source '{}'",
-                base_ref, skill_path, source_name
+                "WARNING: ref '{}' for skill '{}' in source '{}'",
+                ref_, skill_path, source_name
             )?;
             writeln!(
                 writer,
@@ -170,7 +170,7 @@ pub fn write_sync_report<W: Write>(
         }
         writeln!(
             writer,
-            "  Resolve conflict markers in the files above, then update base_ref"
+            "  Resolve conflict markers in the files above, then update ref"
         )?;
         writeln!(
             writer,
@@ -180,15 +180,15 @@ pub fn write_sync_report<W: Write>(
     }
 
     // Manifest save status
-    if result.any_base_ref_updated() {
+    if result.any_ref_updated() {
         let updated_count = result
             .merged
             .iter()
-            .filter(|m| m.new_base_ref != m.old_base_ref)
+            .filter(|m| m.new_ref != m.old_ref)
             .count();
         writeln!(
             writer,
-            "Manifest saved: base_ref updated for {} skill{}.",
+            "Manifest saved: ref updated for {} skill{}.",
             updated_count,
             if updated_count == 1 { "" } else { "s" }
         )?;
@@ -307,15 +307,15 @@ mod tests {
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "mlops/inference/llama-cpp".to_string(),
-            old_base_ref: "abc123def456".to_string(),
-            new_base_ref: "def456abc789".to_string(),
+            old_ref: "abc123def456".to_string(),
+            new_ref: "def456abc789".to_string(),
             files_merged: vec!["SKILL.md".to_string(), "references/api.md".to_string()],
             files_conflicted: vec![],
         });
         let output = capture_report(&result, dir.path());
         assert!(output.contains("Merged (upstream changes applied):"));
         assert!(output.contains("hermes-skills/mlops/inference/llama-cpp"));
-        assert!(output.contains("base_ref: abc123de \u{2192} def456ab"));
+        assert!(output.contains("ref: abc123de \u{2192} def456ab"));
         assert!(output.contains("files merged: SKILL.md, references/api.md"));
     }
 
@@ -365,8 +365,8 @@ mod tests {
         result.conflicted.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "mlops/models/segment-anything-model".to_string(),
-            old_base_ref: "abc123".to_string(),
-            new_base_ref: "abc123".to_string(),
+            old_ref: "abc123".to_string(),
+            new_ref: "abc123".to_string(),
             files_merged: vec![],
             files_conflicted: vec!["SKILL.md".to_string(), "scripts/validate.py".to_string()],
         });
@@ -387,16 +387,16 @@ mod tests {
         result.conflicted.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "skill-a".to_string(),
-            old_base_ref: "abc123".to_string(),
-            new_base_ref: "abc123".to_string(),
+            old_ref: "abc123".to_string(),
+            new_ref: "abc123".to_string(),
             files_merged: vec![],
             files_conflicted: vec!["file1.txt".to_string()],
         });
         result.conflicted.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "skill-b".to_string(),
-            old_base_ref: "def456".to_string(),
-            new_base_ref: "def456".to_string(),
+            old_ref: "def456".to_string(),
+            new_ref: "def456".to_string(),
             files_merged: vec![],
             files_conflicted: vec!["file2.txt".to_string(), "file3.txt".to_string()],
         });
@@ -417,7 +417,9 @@ mod tests {
             "v1.2.3".to_string(),
         ));
         let output = capture_report(&result, dir.path());
-        assert!(output.contains("WARNING: base_ref 'v1.2.3' for skill 'mlops/inference/llama-cpp' in source 'hermes-skills'"));
+        assert!(output.contains(
+            "WARNING: ref 'v1.2.3' for skill 'mlops/inference/llama-cpp' in source 'hermes-skills'"
+        ));
         assert!(output.contains("could not be resolved in the submodule"));
         assert!(output.contains("tag/branch may have been deleted upstream"));
     }
@@ -429,24 +431,24 @@ mod tests {
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "some-skill".to_string(),
-            old_base_ref: "old1234567890".to_string(),
-            new_base_ref: "new1234567890".to_string(),
+            old_ref: "old1234567890".to_string(),
+            new_ref: "new1234567890".to_string(),
             files_merged: vec!["SKILL.md".to_string()],
             files_conflicted: vec![],
         });
         let output = capture_report(&result, dir.path());
-        assert!(output.contains("Manifest saved: base_ref updated for 1 skill."));
+        assert!(output.contains("Manifest saved: ref updated for 1 skill."));
     }
 
     #[test]
-    fn test_report_manifest_not_saved_no_base_ref_change() {
+    fn test_report_manifest_not_saved_no_ref_change() {
         let dir = TempDir::new().unwrap();
         let mut result = make_result();
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "some-skill".to_string(),
-            old_base_ref: "same123456789".to_string(),
-            new_base_ref: "same123456789".to_string(),
+            old_ref: "same123456789".to_string(),
+            new_ref: "same123456789".to_string(),
             files_merged: vec![],
             files_conflicted: vec![],
         });
@@ -461,21 +463,21 @@ mod tests {
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "skill-a".to_string(),
-            old_base_ref: "old1".to_string(),
-            new_base_ref: "new1".to_string(),
+            old_ref: "old1".to_string(),
+            new_ref: "new1".to_string(),
             files_merged: vec!["file.txt".to_string()],
             files_conflicted: vec![],
         });
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "skill-b".to_string(),
-            old_base_ref: "old2".to_string(),
-            new_base_ref: "new2".to_string(),
+            old_ref: "old2".to_string(),
+            new_ref: "new2".to_string(),
             files_merged: vec!["file.txt".to_string()],
             files_conflicted: vec![],
         });
         let output = capture_report(&result, dir.path());
-        assert!(output.contains("Manifest saved: base_ref updated for 2 skills."));
+        assert!(output.contains("Manifest saved: ref updated for 2 skills."));
     }
 
     #[test]
@@ -506,8 +508,8 @@ mod tests {
         result.merged.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "mlops/llama".to_string(),
-            old_base_ref: "aaa111222333".to_string(),
-            new_base_ref: "bbb444555666".to_string(),
+            old_ref: "aaa111222333".to_string(),
+            new_ref: "bbb444555666".to_string(),
             files_merged: vec!["SKILL.md".to_string()],
             files_conflicted: vec![],
         });
@@ -518,8 +520,8 @@ mod tests {
         result.conflicted.push(MergeResult {
             source_name: "hermes-skills".to_string(),
             skill_path: "conflicted-skill".to_string(),
-            old_base_ref: "ccc777".to_string(),
-            new_base_ref: "ccc777".to_string(),
+            old_ref: "ccc777".to_string(),
+            new_ref: "ccc777".to_string(),
             files_merged: vec![],
             files_conflicted: vec!["file.txt".to_string()],
         });
@@ -538,15 +540,15 @@ mod tests {
         assert!(output.contains("Merged (upstream changes applied):"));
         assert!(output.contains("Up to date (modified, no upstream change):"));
         assert!(output.contains("Local skills (mintybasil/):"));
-        assert!(output.contains("WARNING: base_ref 'v1.0.0'"));
+        assert!(output.contains("WARNING: ref 'v1.0.0'"));
         assert!(output.contains("=== ACTION REQUIRED ==="));
-        assert!(output.contains("Manifest saved: base_ref updated for 1 skill."));
+        assert!(output.contains("Manifest saved: ref updated for 1 skill."));
     }
 
     // ── Drift warning in sync_modified integration test ──────────────
 
     #[test]
-    fn test_sync_modified_drift_warning_unresolvable_base_ref() {
+    fn test_sync_modified_drift_warning_unresolvable_ref() {
         use crate::sync::sync_modified;
         use std::process::Command as StdCommand;
 
@@ -595,11 +597,13 @@ mod tests {
             .status()
             .expect("git commit failed");
 
-        // Use a base_ref that doesn't exist (deleted tag)
+        // Use a ref that doesn't exist (deleted tag)
         let mut manifest = crate::manifest::Manifest {
             sources: vec![Source {
                 name: "src1".to_string(),
-                skills: vec![SkillEntry::modified("my-skill", "refs/tags/deleted-tag")],
+                ref_: Some("refs/tags/deleted-tag".to_string()),
+                base_path: None,
+                skills: vec![SkillEntry::modified("my-skill")],
             }],
         };
 

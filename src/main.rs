@@ -48,8 +48,8 @@ fn main() -> Result<()> {
                     let mut result = sync::sync_unmodified(&repo_root, &manifest)?;
                     let modified_result = sync::sync_modified(&repo_root, &mut manifest)?;
 
-                    // Check if any base_refs were updated before moving fields
-                    let need_save = modified_result.any_base_ref_updated();
+                    // Check if any refs were updated before moving fields
+                    let need_save = modified_result.any_ref_updated();
 
                     // Merge modified results into the main result
                     result.merged = modified_result.merged;
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
                     result.conflicted = modified_result.conflicted;
                     result.drift_warnings = modified_result.drift_warnings;
 
-                    // Save manifest if any base_refs were updated
+                    // Save manifest if any refs were updated
                     if need_save {
                         manifest.save(&repo_root)?;
                     }
