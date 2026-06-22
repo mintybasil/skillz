@@ -1,0 +1,40 @@
+sources:
+- name: superpowers
+  ref: v6.0.3
+  base_path: skills
+  skills:
+  - path: brainstorming
+  - path: dispatching-parallel-agents
+  - path: executing-plans
+  - path: finishing-a-development-branch
+  - path: receiving-code-review
+  - path: requesting-code-review
+  - path: subagent-driven-development
+  - path: using-git-worktrees
+  - path: verification-before-completion
+- name: hermes-agent
+  skills:
+  - path: skills/autonomous-ai-agents/hermes-agent
+  - path: skills/creative/architecture-diagram
+  - path: skills/creative/humanizer
+  - path: skills/github/github-auth
+  - path: skills/github/github-code-review
+  - path: skills/github/github-issues
+  - path: skills/github/github-pr-workflow
+  - path: skills/note-taking/obsidian
+  - path: skills/software-development/hermes-agent-skill-authoring
+  - path: skills/software-development/node-inspect-debugger
+  - path: skills/software-development/plan
+  - path: skills/software-development/requesting-code-review
+  - path: skills/software-development/simplify-code
+  - path: skills/software-development/systematic-debugging
+  - path: skills/software-development/test-driven-development
+  - path: optional-skills/communication/one-three-one-rule
+  - path: optional-skills/devops/docker-management
+  - path: optional-skills/devops/watchers
+  - path: optional-skills/research/darwinian-evolver
+  - path: optional-skills/software-development/code-wiki
+- name: apollographql
+  base_path: skills
+  skills:
+  - path: rust-best-practices
