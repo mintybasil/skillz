@@ -101,12 +101,45 @@ fn parse_skill_frontmatter(skill_md_path: &Path) -> Result<(String, String)> {
 }
 
 /// Extract a simple top-level YAML field value (handles quoted and unquoted strings).
+/// Also handles multi-line values that start with `>` (YAML folded/literal block).
 fn extract_yaml_field(yaml: &str, field: &str) -> Option<String> {
-    for line in yaml.lines() {
+    let lines: Vec<&str> = yaml.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix(&format!("{field}:")) {
             let value = rest.trim();
-            // Strip surrounding quotes
+
+            // Multi-line value starting with >
+            if value == ">" || value.starts_with(">-") || value.starts_with(">-") {
+                // Collect subsequent lines until the next top-level field or end
+                let mut desc_lines = Vec::new();
+                for &next_line in &lines[i + 1..] {
+                    let next_trimmed = next_line.trim();
+                    // Stop if we hit a new top-level field (word followed by colon)
+                    if !next_trimmed.is_empty()
+                        && !next_trimmed.starts_with(' ')
+                        && !next_trimmed.starts_with('\t')
+                        && next_trimmed.contains(':')
+                        && !next_trimmed.starts_with('-')
+                        && !next_trimmed.starts_with('>')
+                    {
+                        break;
+                    }
+                    if next_trimmed.is_empty() {
+                        // Keep empty lines within the block, but stop at double empty
+                        desc_lines.push("");
+                    } else {
+                        desc_lines.push(next_trimmed);
+                    }
+                }
+                // Trim trailing empty lines
+                while desc_lines.last().is_some_and(|s| s.is_empty()) {
+                    desc_lines.pop();
+                }
+                return Some(desc_lines.join(" "));
+            }
+
+            // Single-line value — strip surrounding quotes
             let value = value
                 .strip_prefix('"')
                 .and_then(|v| v.strip_suffix('"'))
@@ -235,10 +268,15 @@ pub fn run_import(repo_root: &Path, search_path: &str) -> Result<()> {
                 );
             }
         }
+        // Sort skills alphabetically by path
+        source.skills.sort_by(|a, b| a.path.cmp(&b.path));
         added_skills = selected.iter().take(count).collect();
     } else {
-        // Create new source entry
-        let skills: Vec<SkillEntry> = selected
+        // Create new source entry — sort selected skills by path
+        let mut sorted_selected: Vec<FoundSkill> = selected.clone();
+        sorted_selected.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let skills: Vec<SkillEntry> = sorted_selected
             .iter()
             .map(|s| SkillEntry {
                 path: s.path.clone(),
@@ -586,6 +624,33 @@ mod tests {
             Some("A description".to_string())
         );
         assert_eq!(extract_yaml_field(yaml, "missing"), None);
+    }
+
+    #[test]
+    fn test_extract_yaml_field_multiline() {
+        let yaml = "name: test-skill\ndescription: >\n  This is a multi-line\n  description spanning\n  several lines\nother: value";
+        let result = extract_yaml_field(yaml, "description");
+        assert!(result.is_some());
+        let desc = result.unwrap();
+        assert!(desc.contains("multi-line"));
+        assert!(desc.contains("several lines"));
+    }
+
+    #[test]
+    fn test_parse_skill_frontmatter_multiline_description() {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path().join("multi-desc");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: multi-desc\ndescription: >\n  This skill does amazing things.\n  It spans multiple lines of description.\n---\n# Content\n",
+        )
+        .unwrap();
+
+        let (name, desc) = parse_skill_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
+        assert_eq!(name, "multi-desc");
+        assert!(desc.contains("amazing things"));
+        assert!(desc.contains("multiple lines"));
     }
 
     #[test]
