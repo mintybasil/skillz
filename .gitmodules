@@ -4,3 +4,6 @@
 [submodule "sources/hermes-agent"]
 	path = sources/hermes-agent
 	url = https://github.com/NousResearch/hermes-agent
+[submodule "sources/apollographql"]
+	path = sources/apollographql
+	url = https://github.com/apollographql/skills.git
