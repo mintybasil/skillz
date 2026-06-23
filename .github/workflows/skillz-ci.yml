@@ -1,0 +1,32 @@
+name: Skillz CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - README.md
+      - AGENTS.md
+      - docs/
+
+jobs:
+  lint-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run -- lint
+      - run: cargo run -- sync
+      - run: |
+          git add -A
+          if git diff --quiet --staged; then
+            echo "No changes detected"
+          else
+            git -P diff --staged --summary
+            echo "Changes detected, please update skills on this branch."
+            exit 1
+          fi
