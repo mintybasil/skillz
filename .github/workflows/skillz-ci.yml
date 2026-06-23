@@ -21,4 +21,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo run -- lint
       - run: cargo run -- sync
-      - run: git diff --quiet || echo "Changes detected, please update skills on this branch." && return 1
+      - run: |
+          if [[ ! $(git diff --quiet) ]]; then
+            git -P diff
+            echo "Changes detected, please update skills on this branch."
+            exit 1
+          fi
