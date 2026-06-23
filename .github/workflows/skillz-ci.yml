@@ -22,10 +22,11 @@ jobs:
       - run: cargo run -- lint
       - run: cargo run -- sync
       - run: |
-          if git diff --quiet --exit-code; then
+          git add -A
+          if git diff --quiet --staged; then
             echo "No changes detected"
           else
-            git -P diff
+            git -P diff --staged
             echo "Changes detected, please update skills on this branch."
             exit 1
           fi
