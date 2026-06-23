@@ -79,14 +79,6 @@ Key rules:
 - **TUI**: ratatui + crossterm. Alternate screen buffer. Always restore terminal state on exit.
 - **Field naming**: `ref_` in Rust (with `#[serde(rename = "ref")]`) since `ref` is a keyword.
 
-## Git Workflow
-
-- Branch naming: `feat/`, `fix/`, `refactor/`, `docs/`, `ci/` prefixes.
-- Commits: conventional commits format (`feat:`, `fix:`, `refactor:`, `docs:`).
-- PRs: squash merge. Include "Closes #N" to auto-close issues.
-- Stacked PRs: branch off the previous feature branch, not main. Rebase after merges.
-- CI must pass before merge.
-
 ## Things to Watch Out For
 
 - **serde_yaml is deprecated** but still functional. Don't migrate unless there's a concrete need.
