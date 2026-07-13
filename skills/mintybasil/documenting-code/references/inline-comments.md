@@ -5,16 +5,14 @@ Add an inline comment when code falls into any of these categories. If it doesn'
 ## 1. Non-obvious business rule or domain logic
 
 ```
-// Max loan capped at 80% of appraised value per regulation Z, §226.32 —
-// higher thresholds trigger additional disclosure rules.
+// Cap at 80% per regulation Z §226.32 — higher triggers disclosure rules.
 max_loan = appraised_value * 0.80
 ```
 
 ## 2. Workaround, hack, or non-obvious technical decision
 
 ```
-// Sorted descending because the dashboard chart assumes newest-first
-// and doesn't re-sort on its end.
+// Descending: dashboard chart assumes newest-first and doesn't re-sort.
 entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp))
 ```
 
@@ -33,11 +31,3 @@ let date = NaiveDate::parse_from_str(raw, "%m/%d/%Y")?;
 let (slow, fast) = (head, head);
 ```
 
-## Self-evident code — no comment needed
-
-```
-total = price * quantity
-tax = total * TAX_RATE
-```
-
-If a competent developer can infer the intent, don't comment.
