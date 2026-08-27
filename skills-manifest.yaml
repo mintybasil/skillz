@@ -38,3 +38,9 @@ sources:
   base_path: skills
   skills:
   - path: rust-best-practices
+- name: nvidia-openshell
+  base_path: .agents/skills
+  skills:
+    - path: generate-sandbox-policy
+    - path: openshell-cli
+    - path: watch-github-actions

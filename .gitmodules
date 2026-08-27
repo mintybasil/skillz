@@ -7,3 +7,6 @@
 [submodule "sources/apollographql"]
 	path = sources/apollographql
 	url = https://github.com/apollographql/skills.git
+[submodule "sources/nvidia-openshell"]
+	path = sources/nvidia-openshell
+	url = https://github.com/NVIDIA/OpenShell
